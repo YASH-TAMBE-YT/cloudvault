@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cloud Computing Mini-Project: Encrypted Cloud Storage</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    :root {
+      --bg: #0b1329;
+      --card: #1e293b;
+      --border: #334155;
+      --accent: #38bdf8;
+      --success: #4ade80;
+      --error: #f87171;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      padding: 30px 16px;
+      margin: 0;
+    }
+    .container {
+      width: 100%;
+      max-width: 760px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    h2 { margin-top: 0; color: var(--accent); }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #022c22;
+      border: 1px solid #059669;
+      color: var(--success);
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+    .dot { width: 8px; height: 8px; background: var(--success); border-radius: 50%; }
+    .section-title {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 8px;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .field-row {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    input, select, button {
+      background: #0b1329;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 6px;
+      font-size: 13px;
+      box-sizing: border-box;
+    }
+    input[type="text"] { flex: 1; min-width: 220px; }
+    button {
+      background: var(--accent);
+      color: #0b1329;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: opacity 0.2s;
+    }
+    button:hover { opacity: 0.9; }
+    .chunk-list {
+      margin: 16px 0;
+      max-height: 200px;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: #070d1e;
+    }
+    .chunk-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      font-family: monospace;
+      font-size: 12px;
+    }
+    .chunk-item:last-child { border-bottom: none; }
+    .log-box {
+      margin-top: 16px;
+      padding: 14px;
+      background: #040814;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      font-family: monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>Zero-Knowledge Encrypted Cloud Object Store</h2>
+  
+  <div class="status-badge">
+    <div class="dot"></div> Connected to Cloud: rxaxaianvamsdizptdgj.supabase.co
+  </div>
+
+  <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 20px;">
+    Files are segmented into discrete blocks, encrypted using AES-256-GCM locally in browser memory, and stored in an S3-compatible cloud bucket delivered over global CDN with HTTPS.
+  </p>
+
+  <!-- 1. Segmentation, Encryption & Upload -->
+  <div style="margin-bottom: 24px;">
+    <div class="section-title">1. File Segmentation & Cloud Upload</div>
+    <div class="field-row">
+      <input type="file" id="fileInput">
+      <select id="chunkSize">
+        <option value="524288">512 KB Chunks</option>
+        <option value="1048576" selected>1 MB Chunks</option>
+        <option value="2097152">2 MB Chunks</option>
+      </select>
+    </div>
+    <div class="field-row">
+      <input type="text" id="encryptPass" placeholder="Enter secret passphrase (e.g. MySecretKey123)">
+      <button type="button" id="uploadBtn">Slice, Encrypt & Upload</button>
+    </div>
+  </div>
+
+  <div class="chunk-list" id="chunkContainer" style="display:none;"></div>
+
+  <!-- 2. Cloud Download & Decryption -->
+  <div style="border-top: 1px solid var(--border); padding-top: 20px;">
+    <div class="section-title">2. Secure Cloud Download & Decryption</div>
+    <div class="field-row">
+      <input type="text" id="retrieveFileId" placeholder="File Identifier / Folder ID">
+      <input type="text" id="decryptPass" placeholder="Enter secret passphrase to decrypt">
+      <button type="button" id="downloadBtn">Download from Cloud & Decrypt</button>
+    </div>
+  </div>
+
+  <div id="statusLog" class="log-box" style="display:none;"></div>
+</div>
+
+<script>
+  // Cloud Configuration
+  const SUPABASE_URL = "https://rxaxaianvamsdizptdgj.supabase.co";
+  const SUPABASE_ANON_KEY = "sb_publishable_JXYIHH0wB23lt8KAYQeWlQ_eHeE70_c";
+  const BUCKET_NAME = "cloud-vault";
+
+  // Initialize client with non-colliding variable name
+  const sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const fileInput = document.getElementById('fileInput');
+  const chunkSizeSelect = document.getElementById('chunkSize');
+  const encryptPass = document.getElementById('encryptPass');
+  const decryptPass = document.getElementById('decryptPass');
+  const uploadBtn = document.getElementById('uploadBtn');
+  const downloadBtn = document.getElementById('downloadBtn');
+  const retrieveFileId = document.getElementById('retrieveFileId');
+  const chunkContainer = document.getElementById('chunkContainer');
+  const statusLog = document.getElementById('statusLog');
+
+  function bufToHex(buffer) {
+    return Array.from(new Uint8Array(buffer)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }
+
+  async function computeHash(arrayBuffer) {
+    const digest = await crypto.subtle.digest('SHA-256', arrayBuffer);
+    return bufToHex(digest);
+  }
+
+  async function deriveKey(passphrase, salt) {
+    const enc = new TextEncoder();
+    const baseKey = await crypto.subtle.importKey(
+      "raw", enc.encode(passphrase), { name: "PBKDF2" }, false, ["deriveKey"]
+    );
+    return crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+      baseKey,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+  }
+
+  // 1. SLICE, ENCRYPT AND UPLOAD
+  uploadBtn.addEventListener('click', async () => {
+    const selectedFile = fileInput.files[0];
+    const password = encryptPass.value.trim();
+
+    if (!selectedFile) {
+      alert("Please select a file first using 'Choose File'.");
+      return;
+    }
+    if (!password) {
+      alert("Please enter an encryption passphrase.");
+      return;
+    }
+
+    uploadBtn.disabled = true;
+    uploadBtn.textContent = "Processing...";
+    statusLog.style.display = 'block';
+    statusLog.innerHTML = 'Reading file and preparing cryptographic salt...';
+    chunkContainer.innerHTML = '';
+    chunkContainer.style.display = 'block';
+
+    try {
+      const fileId = 'file_' + Date.now();
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const aesKey = await deriveKey(password, salt);
+
+      const originalBuffer = await selectedFile.arrayBuffer();
+      const originalHash = await computeHash(originalBuffer);
+
+      const CHUNK_SIZE = parseInt(chunkSizeSelect.value, 10);
+      const totalSize = selectedFile.size;
+      let offset = 0, index = 0;
+      const chunkManifest = [];
+
+      while (offset < totalSize) {
+        const end = Math.min(offset + CHUNK_SIZE, totalSize);
+        const rawChunk = selectedFile.slice(offset, end);
+        const rawBuffer = await rawChunk.arrayBuffer();
+
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const encryptedBuffer = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, aesKey, rawBuffer);
+        const encryptedBlob = new Blob([iv, encryptedBuffer], { type: "application/octet-stream" });
+
+        const chunkPath = `${fileId}/chunk_${index}.enc`;
+        statusLog.innerHTML = `Uploading encrypted Chunk #${index} to bucket (${BUCKET_NAME})...`;
+
+        const { error: uploadError } = await sbClient.storage
+          .from(BUCKET_NAME)
+          .upload(chunkPath, encryptedBlob, { contentType: 'application/octet-stream', upsert: true });
+
+        if (uploadError) throw new Error(uploadError.message);
+
+        chunkManifest.push({ index, path: chunkPath, size: encryptedBlob.size });
+
+        const item = document.createElement('div');
+        item.className = 'chunk-item';
+        item.innerHTML = `<span>Segment #${index} [${offset} - ${end} bytes]</span><span style="color:var(--success);">Uploaded (.enc)</span>`;
+        chunkContainer.appendChild(item);
+
+        offset = end;
+        index++;
+      }
+
+      const manifest = {
+        fileId,
+        name: selectedFile.name,
+        type: selectedFile.type,
+        totalChunks: index,
+        saltHex: bufToHex(salt),
+        originalHash,
+        chunks: chunkManifest
+      };
+
+      const { error: mError } = await sbClient.storage
+        .from(BUCKET_NAME)
+        .upload(`${fileId}/manifest.json`, new Blob([JSON.stringify(manifest)], { type: 'application/json' }), { upsert: true });
+
+      if (mError) throw new Error(mError.message);
+
+      retrieveFileId.value = fileId;
+      decryptPass.value = password;
+      statusLog.innerHTML = `
+        <span style="color:var(--success); font-weight:bold;">UPLOAD SUCCESSFUL!</span><br>
+        <strong>Cloud Folder:</strong> ${fileId}/<br>
+        <strong>Chunks Uploaded:</strong> ${index}<br>
+        <strong>Original SHA-256:</strong> ${originalHash}<br>
+        Folder ID and Passphrase have been automatically filled into the download section below[cite: 54].
+      `;
+    } catch (err) {
+      statusLog.innerHTML = `<span style="color:var(--error); font-weight:bold;">Upload Error:</span> ${err.message}`;
+    } finally {
+      uploadBtn.disabled = false;
+      uploadBtn.textContent = "Slice, Encrypt & Upload";
+    }
+  });
+
+  // 2. DOWNLOAD, DECRYPT AND REASSEMBLE
+  downloadBtn.addEventListener('click', async () => {
+    const fileId = retrieveFileId.value.trim();
+    const pass = decryptPass.value.trim();
+    if (!fileId || !pass) {
+      alert("Please provide both the File/Folder ID and the passphrase.");
+      return;
+    }
+
+    downloadBtn.disabled = true;
+    downloadBtn.textContent = "Downloading...";
+    statusLog.style.display = 'block';
+    statusLog.innerHTML = `Retrieving manifest for ${fileId} from cloud...`;
+
+    try {
+      const { data: manifestData, error: mErr } = await sbClient.storage.from(BUCKET_NAME).download(`${fileId}/manifest.json`);
+      if (mErr) throw new Error("Could not find manifest. Ensure the File ID is correct.");
+
+      const manifest = JSON.parse(await manifestData.text());
+      const saltBytes = new Uint8Array(manifest.saltHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+      const aesKey = await deriveKey(pass, saltBytes);
+
+      const decryptedBuffers = [];
+
+      for (let i = 0; i < manifest.totalChunks; i++) {
+        statusLog.innerHTML = `Downloading encrypted chunk #${i} of ${manifest.totalChunks}...`;
+        const { data: chunkBlob, error: cErr } = await sbClient.storage.from(BUCKET_NAME).download(`${fileId}/chunk_${i}.enc`);
+        if (cErr) throw new Error(`Failed to download chunk #${i}`);
+
+        const chunkBuffer = await chunkBlob.arrayBuffer();
+        const iv = new Uint8Array(chunkBuffer.slice(0, 12));
+        const ciphertext = chunkBuffer.slice(12);
+
+        try {
+          const decryptedPart = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, aesKey, ciphertext);
+          decryptedBuffers.push(decryptedPart);
+        } catch {
+          throw new Error("Decryption rejected: Invalid passphrase or corrupted data block[cite: 54].");
+        }
+      }
+
+      const reconstructedBlob = new Blob(decryptedBuffers, { type: manifest.type });
+      const reconstructedBuffer = await reconstructedBlob.arrayBuffer();
+      const restoredHash = await computeHash(reconstructedBuffer);
+
+      const isVerified = restoredHash === manifest.originalHash;
+
+      statusLog.innerHTML = `
+        <strong>Original SHA-256:</strong> ${manifest.originalHash}<br>
+        <strong>Restored SHA-256:</strong> ${restoredHash}<br>
+        <strong>Integrity Verification:</strong> ${
+          isVerified 
+            ? '<span style="color:var(--success); font-weight:bold;">100% BYTE INTEGRITY MATCH</span>' 
+            : '<span style="color:var(--error); font-weight:bold;">HASH MISMATCH</span>'
+        }
+      `;
+
+      const dlLink = document.createElement('a');
+      dlLink.href = URL.createObjectURL(reconstructedBlob);
+      dlLink.download = `restored_${manifest.name}`;
+      document.body.appendChild(dlLink);
+      dlLink.click();
+      document.body.removeChild(dlLink);
+
+    } catch (err) {
+      statusLog.innerHTML = `<span style="color:var(--error); font-weight:bold;">Error:</span> ${err.message}`;
+    } finally {
+      downloadBtn.disabled = false;
+      downloadBtn.textContent = "Download from Cloud & Decrypt";
+    }
+  });
+</script>
+
+</body>
+</html>
